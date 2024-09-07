@@ -1,132 +1,115 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const path = require('path');
 const fs = require('fs');
 
-const url = 'https://anilist.co/user/miku1598/animelist';
+const userListUrl = 'https://anilist.co/user/miku1598/animelist';
+const anilistApiUrl = 'https://graphql.anilist.co';
+const query = `
+  query ($id: Int) {
+    Media (id: $id, type: ANIME) {
+      id
+      title {
+        romaji
+        english
+        native
+      }
+      format
+      coverImage {
+        large
+      }
+      averageScore
+      episodes
+      status
+      description (asHtml: false)
+    }
+  }
+`;
 
-axios.get(url,{ 
+const saveProgressToJson = (data, filePath) => {
+  const json = JSON.stringify(data, null, 2);
+  fs.writeFileSync(filePath, json, 'utf8');
+};
+
+const fetchAnimeDetails = async (animeIds, category) => {
+  const animeDetailsPromises = [];
+
+  for (const animeId of animeIds) {
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for 2 seconds
+
+    const promise = axios.post(anilistApiUrl, {
+      query: query,
+      variables: { id: parseInt(animeId) }
+    }).then(response => {
+      const animeDetail = response.data.data.Media;
+      return animeDetail;
+    }).catch(error => {
+      console.error(`Error fetching details for anime ID ${animeId}:`, error);
+      return null;
+    });
+
+    animeDetailsPromises.push(promise);
+  }
+
+  return Promise.all(animeDetailsPromises).then(details => {
+    const filteredDetails = details.filter(detail => detail !== null);
+    return { category, details: filteredDetails };
+  });
+};
+
+axios.get(userListUrl, {
   headers: {
-    'Cache-Control': 'no-cache' // 告诉浏览器不要缓存响应
+    'Cache-Control': 'no-cache'
   }
 })
   .then(response => {
     const html = response.data;
     const $ = cheerio.load(html);
+    const watchingAnimeIds = [];
+    const completedAnimeIds = [];
+    const planningAnimeIds = [];
 
-    // 定义针对“Watching”、“Completed”和“Rewatching”的选择器
-    const sectionSelectors = [
-      { name: 'Watching', selector: 'h3:contains("Watching")' },
-      { name: 'Completed', selector: 'h3:contains("Completed")' },
-      { name: 'Rewatching', selector: 'h3:contains("Rewatching")' },
-      { name: 'Planning', selector: 'h3:contains("Planning")' }
-    ];
+    const sectionSelectors = {
+      Watching: 'h3:contains("Watching")',
+      Completed: 'h3:contains("Completed")',
+      Planning: 'h3:contains("Planning")'
+    };
 
-    // 用于存储“Watching”、“Completed”和“Rewatching”动画的数组
-    const watchingResults = [];
-    const completedResults = [];
-    const rewatchingResults = [];
-    const planningResults = [];
+    Object.keys(sectionSelectors).forEach(category => {
+      const selector = sectionSelectors[category];
+      const animeIds = category === 'Watching' ? watchingAnimeIds
+                      : category === 'Completed' ? completedAnimeIds
+                      : planningAnimeIds;
 
-    // 遍历所有可能的分类
-    sectionSelectors.forEach(section => {
-      // 找到当前分类的h3标签
-      const sectionH3 = $(section.selector);
-      if (sectionH3.length) {
-        // 找到当前分类的列表部分
-        const listSelector = sectionH3.next();
-        $(listSelector).find('.entry').each((index, element) => {
-          const cover = $(element).find('.image').css('background-image');
-          const coverUrl = cover ? cover.replace(/^url\(['"]?/, '').replace(/['"]?\)$/, '') : null;
-          const title = $(element).find('.title').text().trim();
-          const progress = $(element).find('.progress').text().trim();
-          const id = $(element).find('a').attr('href').match(/\/anime\/(\d+)/)[1];
-          const format = $(element).find('.format').text().trim();
-          let score = $(element).find('.score').text().trim();
-          if (score === '') {
-            score = '-'; // 如果评分是空字符串，则设置为'-'
-          } else {
-            score = parseInt(score, 10); // 如果评分不是空字符串，则转换为整数
-          }
-          switch (section.name) {
-            case 'Watching':
-              watchingResults.push({
-                id: id,
-                title: title,
-                type: format, 
-                cover: coverUrl,
-                score: score,
-                des: '-', // 描述未提供
-                wish: '-', // 愿望未提供
-                doing: '-', // 进行中未提供
-                collect: '-', // 收藏未提供
-                totalCount: progress, 
-                myComment: '' // 评论未提供
-              });
-              break;
-            case 'Completed':
-              completedResults.push({
-                id: id,
-                title: title,
-                type: format, 
-                cover: coverUrl,
-                score: score,
-                des: '-', // 描述未提供
-                wish: '-', // 愿望未提供
-                doing: '-', // 进行中未提供
-                collect: '-', // 收藏未提供
-                totalCount: progress, 
-                myComment: '' // 评论未提供
-              });
-              break;
-            case 'Rewatching':
-              rewatchingResults.push({
-                id: id,
-                title: title,
-                type: format, 
-                cover: coverUrl,
-                score: score,
-                des: '-', // 描述未提供
-                wish: '-', // 愿望未提供
-                doing: '-', // 进行中未提供
-                collect: '-', // 收藏未提供
-                totalCount: progress, 
-                myComment: '' // 评论未提供
-              });
-              break;
-            case 'Planning':
-              planningResults.push({
-                id: id,
-                title: title,
-                type: '动画', 
-                cover: coverUrl,
-                score: score,
-                des: '-', // 描述未提供
-                wish: '-', // 愿望未提供
-                doing: '-', // 进行中未提供
-                collect: '-', // 收藏未提供
-                totalCount: progress, 
-                myComment: '' // 评论未提供
-              });
-              break;
-          }
-        });
-      }
+      $(selector).next().find('.entry').each((index, element) => {
+        const animeId = $(element).find('a').attr('href').match(/\/anime\/(\d+)/)[1];
+        animeIds.push(animeId);
+      });
     });
 
-    // 将结果数组转换为JSON字符串
-    const json = JSON.stringify({
-      watching: watchingResults,
-      watched: completedResults,
-      rewatching: rewatchingResults,
-      wantWatch: planningResults
-    }, null, 2);
+    // Now that fetchAnimeDetails is async, we need to handle it properly
+    const fetchAllAnimeDetails = async () => {
+      try {
+        const allAnimeDetailsPromises = [
+          fetchAnimeDetails(watchingAnimeIds, 'Watching'),
+          fetchAnimeDetails(completedAnimeIds, 'Completed'),
+          fetchAnimeDetails(planningAnimeIds, 'Planning')
+        ];
 
-    // 打印JSON字符串
-    console.log(json);
+        const results = await Promise.all(allAnimeDetailsPromises);
+        const combinedAnimeDetails = results.reduce((acc, result) => {
+          acc[result.category] = result.details;
+          saveProgressToJson(acc, 'anilist_details.json'); // Save progress after each category is processed
+          return acc;
+        }, {});
 
-    // 将JSON字符串写入文件
-    fs.writeFileSync(`anilist.json`, json, 'utf8');
+        // Final save after all categories are processed
+        saveProgressToJson(combinedAnimeDetails, 'anilist_details_final.json');
+      } catch (error) {
+        console.error('Error fetching anime details:', error);
+      }
+    };
+
+    fetchAllAnimeDetails();
   })
   .catch(error => {
     console.error('Error fetching the URL:', error);
