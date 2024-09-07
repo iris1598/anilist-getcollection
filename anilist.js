@@ -2,7 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const fs = require('fs');
 
-const userListUrl = 'https://anilist.co/user/miku1598/animelist';
+const userListUrl = ' ';//e.g.:'https://anilist.co/user/xxxxxx/animelist'
 const anilistApiUrl = 'https://graphql.anilist.co';
 const query = `
   query ($id: Int) {
@@ -30,8 +30,21 @@ const saveProgressToJson = (data, filePath) => {
   fs.writeFileSync(filePath, json, 'utf8');
 };
 
-const fetchAnimeDetails = async (animeIds, category) => {
+const printProgressBar = (current, total, category, index) => {
+  process.stdout.moveCursor(0, -index); // Move to the correct line
+  process.stdout.clearLine(0); // Clear the current line
+  const percentage = (current / total) * 100;
+  const barLength = 20;
+  const filledBarLength = Math.round(percentage / (100 / barLength));
+  const emptyBarLength = barLength - filledBarLength;
+  const bar = '='.repeat(filledBarLength) + ' '.repeat(emptyBarLength);
+  process.stdout.write(`Progress for ${category}: [${bar}] ${percentage.toFixed(2)}%\n`);
+  process.stdout.moveCursor(0, index); // Move back to the bottom
+};
+
+const fetchAnimeDetails = async (animeIds, category, index) => {
   const animeDetailsPromises = [];
+  let currentIndex = 0;
 
   for (const animeId of animeIds) {
     await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for 2 seconds
@@ -40,9 +53,12 @@ const fetchAnimeDetails = async (animeIds, category) => {
       query: query,
       variables: { id: parseInt(animeId) }
     }).then(response => {
-      const animeDetail = response.data.data.Media;
-      return animeDetail;
+      currentIndex++;
+      printProgressBar(currentIndex, animeIds.length, category, index);
+      return response.data.data.Media;
     }).catch(error => {
+      currentIndex++;
+      printProgressBar(currentIndex, animeIds.length, category, index);
       console.error(`Error fetching details for anime ID ${animeId}:`, error);
       return null;
     });
@@ -51,8 +67,7 @@ const fetchAnimeDetails = async (animeIds, category) => {
   }
 
   return Promise.all(animeDetailsPromises).then(details => {
-    const filteredDetails = details.filter(detail => detail !== null);
-    return { category, details: filteredDetails };
+    return { category, details: details.filter(detail => detail !== null) };
   });
 };
 
@@ -64,45 +79,30 @@ axios.get(userListUrl, {
   .then(response => {
     const html = response.data;
     const $ = cheerio.load(html);
-    const watchingAnimeIds = [];
-    const completedAnimeIds = [];
-    const planningAnimeIds = [];
+    const animeLists = ['Watching', 'Completed', 'Planning'].map(category => ({
+      category,
+      animeIds: []
+    }));
 
-    const sectionSelectors = {
-      Watching: 'h3:contains("Watching")',
-      Completed: 'h3:contains("Completed")',
-      Planning: 'h3:contains("Planning")'
-    };
-
-    Object.keys(sectionSelectors).forEach(category => {
-      const selector = sectionSelectors[category];
-      const animeIds = category === 'Watching' ? watchingAnimeIds
-                      : category === 'Completed' ? completedAnimeIds
-                      : planningAnimeIds;
-
-      $(selector).next().find('.entry').each((index, element) => {
+    animeLists.forEach(item => {
+      $(`h3:contains("${item.category}")`).next().find('.entry').each((index, element) => {
         const animeId = $(element).find('a').attr('href').match(/\/anime\/(\d+)/)[1];
-        animeIds.push(animeId);
+        item.animeIds.push(animeId);
       });
     });
 
-    // Now that fetchAnimeDetails is async, we need to handle it properly
     const fetchAllAnimeDetails = async () => {
       try {
-        const allAnimeDetailsPromises = [
-          fetchAnimeDetails(watchingAnimeIds, 'Watching'),
-          fetchAnimeDetails(completedAnimeIds, 'Completed'),
-          fetchAnimeDetails(planningAnimeIds, 'Planning')
-        ];
+        const allAnimeDetailsPromises = animeLists.map((item, index) => {
+          return fetchAnimeDetails(item.animeIds, item.category, index);
+        });
 
         const results = await Promise.all(allAnimeDetailsPromises);
         const combinedAnimeDetails = results.reduce((acc, result) => {
           acc[result.category] = result.details;
-          saveProgressToJson(acc, 'anilist_details.json'); // Save progress after each category is processed
           return acc;
         }, {});
 
-        // Final save after all categories are processed
         saveProgressToJson(combinedAnimeDetails, 'anilist_details_final.json');
       } catch (error) {
         console.error('Error fetching anime details:', error);
