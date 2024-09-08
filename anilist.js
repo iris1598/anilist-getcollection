@@ -47,7 +47,7 @@ const fetchAnimeDetails = async (animeIds, category, index) => {
   let currentIndex = 0;
 
   for (const animeId of animeIds) {
-    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for 2 seconds
+    await new Promise(resolve => setTimeout(resolve, 4000)); // Wait for 4 seconds
 
     const promise = axios.post(anilistApiUrl, {
       query: query,
