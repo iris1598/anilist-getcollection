@@ -1,4 +1,5 @@
 # anilist-getcollection
+## 大佬已实现
  简单的脚本，想法是抛砖引玉
 已知的问题：
 1、需要使用默认的anime list样式，否则获取不到id
